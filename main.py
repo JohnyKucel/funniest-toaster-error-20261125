@@ -6,6 +6,8 @@ newline. Validation raises ValueError with a clear message instead of
 relying on assert, so checks stay active even under python -O.
 `--verify` validates only and writes nothing; the normal run writes the
 entry atomically (temp file + fsync + os.replace) to /output/entry.txt.
+Output location is fixed by OUTPUT_DIR / ENTRY_FILENAME below so the
+path is defined in exactly one place.
 """
 
 import argparse
@@ -18,6 +20,8 @@ ENTRY = "E09: Slot 1 is haunted. Slot 2 works fine. The toaster does not know wh
 
 MIN_ENTRY_CHARS = 1
 MAX_ENTRY_CHARS = 120
+OUTPUT_DIR = Path("/output")
+ENTRY_FILENAME = "entry.txt"
 
 
 def format_entry(text):
@@ -36,7 +40,11 @@ def format_entry(text):
 
 
 def validate_entry(text):
-    """Entry must be a non-empty one-liner within the platform character limit."""
+    """Entry must be a non-empty one-liner within the platform character limit.
+
+    Returns the formatted single line; raises ValueError on any violation
+    so a bad entry fails loudly instead of writing a wrong file.
+    """
     if not isinstance(text, str):
         raise ValueError("entry must be a string")
     formatted = format_entry(text)
@@ -82,14 +90,14 @@ def main(argv=None):
     if args.verify:
         print(f"entry valid: {len(entry)} characters, single line, no trailing newline")
         return 0
-    out_dir = Path("/output")
+    out_dir = OUTPUT_DIR
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         print(f"cannot create output directory {out_dir}: {exc}", file=sys.stderr)
         return 1
     try:
-        write_entry_atomic(out_dir / "entry.txt", entry)
+        write_entry_atomic(out_dir / ENTRY_FILENAME, entry)
     except OSError as exc:
         print(f"cannot write entry: {exc}", file=sys.stderr)
         return 1
