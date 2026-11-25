@@ -9,6 +9,11 @@ entry atomically (temp file + fsync + os.replace + directory fsync) to
 /output/entry.txt.
 Output location is fixed by OUTPUT_DIR / ENTRY_FILENAME below so the
 path is defined in exactly one place.
+Entry point flow is deliberately split so each step is testable alone:
+_parse_args() owns the CLI surface, _ensure_output_dir() owns the
+filesystem precondition, and main() only orchestrates the steps in
+order — parse, validate, verify-or-write — and maps every failure to
+its exit code. No step hides inside another step.
 """
 
 import argparse
@@ -95,14 +100,52 @@ def write_entry_atomic(path, text):
         raise
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description="Write the competition entry.")
+def _parse_args(argv):
+    """Parse the command line and return the parsed arguments.
+
+    The CLI has exactly one flag: --verify, which validates the entry
+    text and writes nothing. Keeping the parser in its own helper means
+    main() never touches argparse directly, and the flag set can be
+    inspected or tested without running the whole program. ``argv`` is
+    passed straight through to parse_args so tests can inject it; when
+    it is None, argparse reads sys.argv as usual.
+    """
+    parser = argparse.ArgumentParser(
+        description="Write the competition entry.",
+    )
     parser.add_argument(
         "--verify",
         action="store_true",
         help="only validate the entry text, do not write any file",
     )
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
+
+
+def _ensure_output_dir(directory):
+    """Create the output directory if needed and return it.
+
+    Creates missing parents as well, and succeeds silently when the
+    directory already exists, so repeated runs are idempotent. Any
+    OSError (for example a permission problem, or a file sitting where
+    the directory should be) is left to the caller: main() turns it
+    into a one-line diagnostic on stderr plus exit code 1, instead of
+    letting a traceback leak to the user.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def main(argv=None):
+    """Orchestrate one run: parse, validate, verify-or-write.
+
+    Steps, in order: parse the arguments; validate the fixed entry
+    text; in --verify mode report the entry as valid and stop; otherwise
+    ensure the output directory exists and write the entry atomically.
+    Returns 0 on success and 1 on any validation, directory, or write
+    failure, with the reason printed to stderr. main() does no work
+    itself beyond calling the helpers and mapping failures to codes.
+    """
+    args = _parse_args(argv)
     try:
         entry = validate_entry(ENTRY)
     except ValueError as exc:
@@ -111,11 +154,10 @@ def main(argv=None):
     if args.verify:
         print(f"entry valid: {len(entry)} characters, single line, no trailing newline")
         return 0
-    out_dir = OUTPUT_DIR
     try:
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = _ensure_output_dir(OUTPUT_DIR)
     except OSError as exc:
-        print(f"cannot create output directory {out_dir}: {exc}", file=sys.stderr)
+        print(f"cannot create output directory {OUTPUT_DIR}: {exc}", file=sys.stderr)
         return 1
     try:
         write_entry_atomic(out_dir / ENTRY_FILENAME, entry)
