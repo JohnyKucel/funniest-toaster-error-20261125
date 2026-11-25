@@ -5,7 +5,8 @@ The entry text is fixed: exactly 80 characters, one line, no trailing
 newline. Validation raises ValueError with a clear message instead of
 relying on assert, so checks stay active even under python -O.
 `--verify` validates only and writes nothing; the normal run writes the
-entry atomically (temp file + fsync + os.replace) to /output/entry.txt.
+entry atomically (temp file + fsync + os.replace + directory fsync) to
+/output/entry.txt.
 Output location is fixed by OUTPUT_DIR / ENTRY_FILENAME below so the
 path is defined in exactly one place.
 """
@@ -56,6 +57,25 @@ def validate_entry(text):
     return formatted
 
 
+def _fsync_dir(directory):
+    """Best-effort fsync of a directory so a rename survives a crash.
+
+    Directory fsync is not supported on every filesystem, so an OSError
+    here is tolerated — the file itself was already fsynced before the
+    rename, which is the part that must not fail silently.
+    """
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def write_entry_atomic(path, text):
     """Write via a temp file in the same directory, fsync it, then
     os.replace atomically, so a crash cannot leave a half-written entry."""
@@ -66,6 +86,7 @@ def write_entry_atomic(path, text):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_name, path)
+        _fsync_dir(path.parent)
     except BaseException:
         try:
             os.unlink(tmp_name)
@@ -105,4 +126,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    # Propagate main()'s exit code so a failed write/validation is
+    # visible to the caller instead of silently exiting 0.
     sys.exit(main())
